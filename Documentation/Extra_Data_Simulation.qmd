@@ -1,0 +1,855 @@
+---
+title: "Data Simulation Script"
+author: "Nico Ordax"
+format: html
+editor: visual
+execute:
+  freeze: auto
+---
+
+```{r}
+#| label: Loading packages
+#| echo: TRUE
+#| message: FALSE
+#| warning: FALSE
+
+# Loading packages using pacman
+pacman::p_load("tidyverse", # general data management
+               "sf", # spatial data management (vectorial data)
+               "terra", # spatial data management (raster data)
+               "lubridate", # time data management
+               "circular", # working with data in circular space
+               "ggplot2", # plotting 
+               "patchwork", # plotting several plots together
+               "ggpp", # plotting figures inside of other figures
+               "here", # filepath management
+               "furrr", # Paralel computing
+               "future" # Paralel computing
+               )
+
+```
+
+## Why simulating data?
+
+Data simulation is a useful tool when we are working with models, and it presents certain advantages over using real-world data. The main one is that if we know the data generating process, we know what results we should expect, and thus how well our models are fitting our data. When simulating data we decide parameter values, allowing us to compare model estimates to the real values we set. Simulating data often also helps us better understand the model, and how the data that we see can be a result of it.
+
+## Choosing what the data will look like
+
+These three days we'll be using an example dataset that I've generated specifically for this workshop. Each analysis will be looking at a different aspect of Step Selection Functions, but all we be conducted on the same dataset generated here. For this workshop I've chosen the Pyrenean chamois *Rupicapra pyrenaica* as the example species, simulating data as if we had tagged 30 individuals with GPS collars in the Catalan Pyrenees.
+
+![Our model organism: the Pyrenean chamois © Yves Bas](images/Rupicapra.jpeg)
+
+During the practical sessions, we will be analysing how chamois select different habitats available to them, and even how they are selecting the way they move itself. We will also introduce how we can allow selection to vary through time (in this case at a daily scale), and how to fit models when selection or movement behave non-linearly. To do so we will fit a set of models of increasing complexity to our data, always trying to capture the processes behind movement and selection as accurately as possible.
+
+When simulating our datasets we will have to think about the entire movement and selection process. We will first define how our animals move in the absence of selection, and then add the selection component. We will also have to take into account our simulated sampling process (what GPS-fix intervals do we want, should we add location error, etc.)
+
+### Defining the sampling process
+
+I have decided to keep things simple and simulating tracks for 30 animals which will be approximately 1000 locations each, all sampled at roughly 20min intervals. These are fairly realistic settings for data coming from larger terrestrial animals, and should work fine in our practical sessions. This doesn't mean that SSFs can't be done with data of less resolution or with fewer locations. Our study area will be the Cadí mountain range in northern Catalonia, where our simulated chamois will be moving. Tracks will be sampled throughout the day, and so will reflect movement and habitat selection for the entire sampling process. If we were interested in diurnal habitat selection we could simply discard nighttime locations and fit our models to the daytime locations only.
+
+### Defining the baseline movement kernel
+
+We will be modelling movement in the traditional way: as a series of steps in two dimensions, characterized by a **step length** and a **turning angle**. This is the most common approach and works particularly well with Step Selection Functions, and many other state of the art methods[^1]. It is simple and intuitive, and most current methods have been designed with it in mind. This doesn't mean, however, that different movement *kernels*[^2] can't be utilized in SSF. As we'll see in the last day, you can get as creative as you want when it comes to customizing your movement kernel!
+
+[^1]: e.g. Hidden Markov Models, Continuous-Time Movement Models, pretty much all models for estimating space use...
+
+[^2]: A movement kernel defines the probability of an animal moving from one location to another over a given time step. It is typically the probability distribution of the movement parameters defining movement. In this instance our movement kernel is our distribution of step lengths multiplied by our distribution of turning angles. In general, the word *kernel* is usually applied to probability distributions that integrate to 1
+
+In this case we need to decide what kind of step length and turning angle distributions we want our animals to follow. For simplicity's sake we will use an **exponential distribution**[^3] for step lengths and a **Von Mises distribution**[^4] for turning angles. These are two of the simplest distributions that fit movement data well, and can both be characterized by a single parameter. For the step length distribution we will characterize the **rate** parameter $\lambda$ which relates directly to the mean of the distribution (which is $1/\lambda$). For the turning angle distribution we will characterize the **concentration** parameter $\kappa$, which indicates how broad or narrow our turn-angle distribution will be.
+
+[^3]: The exponential distribution is a right skewed distribution of positive real numbers (i.e. no negative numbers, decimals allowed) with a probability density function $f(x) = \lambda e^{-\lambda x}$. In this case $x$ are our possible step lengths and $\lambda$ is the rate parameter. The mean of the exponential distribution is $1/\lambda$ and its variance is $1/\lambda^2$
+
+[^4]: The Von Mises distribution is similar to a normal distribution in a circular space. This means that it is continuous over all angles between $-\pi$ to $\pi$, with one peak (analogous to the mean of the normal distribution), and a concentration parameter that controls how broad or narrow the peak is (analogous to the variance parameter of the normal distribution). The density function has equal values at $-\pi$ and $\pi$. The probability density function is $f(x;\mu,\kappa) = \frac{1}{2\pi I_0(\kappa)} \exp\big(\kappa \cos(x-\mu)\big)$ where $\mu$ is the mean, $\kappa$ is the dispersal and $x$ are our possible turning angles. In movement ecology we tend to assume that $\mu = 0$, leaving us with only $\kappa$ as the parameter to estimate.
+
+I will now *choose* a value for rate and concentration that I think represents more or less what chamois will do in real life. This is probably way off what they really do, but for learning purposes let's just roll with it. Since our sampling interval is 10 min, I will assume that on average chamois will move *on average* about 25m in that time. I will also assume that they tend to move in a straight line, but I don't want to restrict movement too much. Since the rate of the exponential step length distribution is the inverse of the mean I will set $\lambda = 1/40$. An intermediate value for the concentration parameter could be something like $\kappa = 1.5$. Keep in mind that these values reflect what our chamois would do when there is no habitat selection involved, it's sort of a baseline way of moving when the landscape is uniform. These also don't mean that the chamois always takes steps with length $40$ and turning angles of $0º$, it just tells us how likely it is it will take a step of any given step length and turning angle.
+
+```{r}
+#| label: Defining baseline movement parameters
+#| echo: TRUE
+#| message: FALSE
+#| warning: FALSE
+
+# Setting movement parameters
+lambda <- 1/40
+kappa <- 1.5
+```
+
+Before continuing, I am showing briefly how the step length and turn angle distributions look like with the chosen $\lambda$ and $\kappa$, as well as how they would look with different parameter values.
+
+```{r}
+#| label: Plotting SL & TA distributions
+#| echo: TRUE
+#| message: FALSE
+#| warning: FALSE
+#| code-fold: TRUE
+#| cache: TRUE
+
+## Parameters ####
+# Plotting the distributions with 4 different parameter values
+lambda_vals <- c(0.005, 0.01, 0.025, 0.1) 
+kappa_vals <- c(0.5, 1, 1.5, 2)
+# Highlight the distributions we chose
+highlight_lambda <- 0.025
+highlight_kappa <- 1.5
+# Setting mean turning angle to 0
+mu <- 0
+
+## Step length data ####
+# Calculating step length probability at 500 points between 0 and 250m
+x_sl <- seq(0, 500, length.out = 500)
+sl_data <- do.call(rbind, lapply(lambda_vals, function(l) {
+  data.frame(x = x_sl, y = dexp(x_sl, rate = l), lambda = factor(l))
+}))
+
+## Turning angle data ####
+# Same as above but for turning angles
+x_ta <- seq(-pi, pi, length.out = 200)
+ta_data <- do.call(rbind, lapply(kappa_vals, function(k) {
+  data.frame(x = x_ta, y = dvonmises(circular(x_ta), mu = circular(mu), kappa = k), kappa = factor(k))
+}))
+
+## Step length plot ####
+p1 <- ggplot(sl_data, aes(x = x, y = y, color = lambda)) +
+  geom_line(aes(size = (lambda == highlight_lambda), 
+                linetype = (lambda == highlight_lambda))) +
+  scale_size_manual(values = c(`TRUE` = 1.5, `FALSE` = 0.8), 
+                    guide = "none") +
+  scale_linetype_manual(values = c(`TRUE` = "solid", `FALSE` = "dashed"), 
+                        guide = "none") +
+  labs(title = "Step length distributions", 
+       x = "Step Length (m)", 
+       y = "Density", 
+       color = "lambda") +
+  xlim(0, 250) +
+  theme_minimal()
+
+## Turning angle plot ####
+p2 <- ggplot(ta_data, aes(x = x, y = y, color = kappa)) +
+  geom_line(aes(size = (kappa == highlight_kappa), 
+                linetype = (kappa == highlight_kappa))) +
+  scale_size_manual(values = c(`TRUE` = 1.5, `FALSE` = 0.8), 
+                    guide = "none") +
+  scale_linetype_manual(values = c(`TRUE` = "solid", `FALSE` = "dashed"), 
+                        guide = "none") +
+  labs(title = "Turning angle distributions", 
+       x = "Turn angle (radians)", 
+       y = "Density", 
+       color = "kappa") +
+  theme_minimal()
+
+## Plotting both plots side by side ####
+p1 + p2
+
+```
+
+As we can see our simulated animals (thick green line) will mostly take small steps of less than 100m but occasionally take larger steps of up to 250m, only exceptionally surpassing that. Most steps will tend to continue in a straight line, but moderate turning angles are also common. Full 180º turns are more rare, but not impossible.
+
+Now that we have decided on how the animals are going to move when there is no selection involved, let's start complicating things.
+
+### Defining the selection process
+
+Our chamois aren't walking aimlessly across the landscape. They have areas that they like and areas they don't like. They will tend to move away from the latter to search out the former. In this section I'm going to characterize how this preference manifests in our movement tracks. I will add habitat selection at two different levels: a difference in preference for certain habitat types (between *open*, *shrubland* and *forest*) and a preference for certain elevations.
+
+#### Selection for different habitat types
+
+We will be using a modified version of the Mapa de Cobertes del Sòl de Catalunya, in which we have pooled our habitat types into one of the following three:
+
+-   *Open*: any open habitat such as grasslands, rocky terrain or constructed surface.
+
+-   *Shrubland*: areas dominated by woody vegetation of low to medium height, with sparse or no tree cover.
+
+-   *Forest*: any woodland with moderate to dense tree cover.
+
+I will assume that our imaginary **chamois will generally prefer open landscapes** compared to shrubland and forest. Open landscapes are easier to move through and provide good foraging grounds, while shrubland and forest are harder to navigate and have less food availability[^5]. I will encode this preference as the relative preference of one habitat type over the other. This means that one of my three habitat types (doesn't matter which), will act as my reference value. We call this preference **Relative Selection Strength (RSS)**. The RSS will tell us how much more likely it is that the chamois will choose the other habitat type over the reference habitat type. In this case if we set *forest* as out preference type we will have two RSS parameters:
+
+[^5]: A small reminder that I'm no chamois researcher, don't take this at face value. This is just an illustrative example for fitting Step Selection Functions. If anybody knows about chamois habitat selection please let us know!
+
+a)  Preference for *shrubland* over *forest* ($RSS_{shrubland}$)
+
+b)  Preference for *open* over *forest* ($RSS_{open}$)
+
+The RSS parameters are typically treated on the log-odds scale (as log-RSS). What this means is that the probability of choosing the habitat type in question is $exp(logRSS)$ times greater than the probability of choosing the reference habitat type. This means that:
+
+-   $logRSS > 0$: the habitat in question is more likely to be chosen than the reference.
+
+-   $logRSS = 0$: the habitat in question and the reference are as likely to be chosen.
+
+-   $logRSS < 0$: the habitat in question is less likely to be chosen than the reference.
+
+Now I'm going to set values for the RSS of our habitats that reflect the chamois' preference for open habitats over shrubland and forest.
+
+```{r}
+#| label: Setting selection preference for habitat type
+#| echo: TRUE
+#| message: FALSE
+#| warning: FALSE
+
+# Setting log-RSS
+logrss_shrubland <- 1.4 # Moderate selection for shrubland
+logrss_open <- 1.8 # Stronger selection for open habitats
+```
+
+#### Selection for altitude
+
+Like many species, chamois have an optimal altitudinal range. This means that there is a minimum and maximum altitude at which they can be found, with an optimum somewhere in between. These relationships are rarely linear, and they often don't follow any of the more common distributions available to us. In such cases we often work with models that allow fitting of non-linear relationships such as GAMs, which we will do on the third day of the workshop.
+
+To simulate such a non-linear relationship I will overlap several normal distributions and smooth them using a spline function. This is just a way of achieving "messy-looking" non-linear data.
+
+```{r}
+#| label: Generating a selection curve for altitude
+#| echo: TRUE
+#| message: FALSE
+#| warning: FALSE
+#| code-fold: TRUE
+#| cache: TRUE
+
+set.seed(123)
+
+## Create altitude sequence and set base parameters ####
+alt <- seq(0, 3000, length.out = 300)
+# Set a primary and secondary peaks
+peak1 <- 2050
+peak2 <- 1550
+peak3 <- 2250
+peak4 <- 1800
+peak5 <- 1600
+peak6 <- 1800
+
+## Add normal distributions at the peaks ####
+# By overlapping several different normal distributions we get a "non-linear looking" response
+alt_df <- data.frame(alt,
+                     p1 = 1.6*exp(-2.8*((alt - peak1)/200)^2),
+                     p2 = 0.2*exp(-1.5*((alt - peak2)/150)^2),
+                     p3 = 0.1*exp(-1.0*((alt - peak3)/200)^2),
+                     p4 = 0.1*exp(-0.9*((alt - peak4)/50)^2),
+                     p5 = 0.1*exp(-0.5*((alt - peak5)/70)^2),
+                     p6 = 0.3*exp(-3.0*((alt - peak6)/200)^2))
+alt_df$pref <- alt_df$p1 + 
+  alt_df$p2 + 
+  alt_df$p3 + 
+  alt_df$p4 + 
+  alt_df$p5 + 
+  alt_df$p6
+
+ggplot(data = alt_df, aes(x = alt)) +
+  geom_line(aes(y = p1), color = "black") +
+  geom_line(aes(y = p2), color = "blue") +
+  geom_line(aes(y = p3), color = "red") +
+  geom_line(aes(y = p4), color = "green") +
+  geom_line(aes(y = p5), color = "yellow") +
+  geom_line(aes(y = p6), color = "purple") 
+
+## Fit it with a spline and plot #### 
+spline_fit <- smooth.spline(alt_df$alt, alt_df$pref, spar = 0.6)
+pref_smooth <- predict(spline_fit, alt_df$alt)$y
+pref_smooth[pref_smooth < 0] <- 0 # Avoiding negative log-RSS
+plot(alt_df$alt, pref_smooth, type = "l", lwd = 2, col = "blue",
+     xlab = "Altitude (m)", ylab = "Log-RSS")
+```
+
+With continuous variables Relative Selection Strength becomes a bit harder to interpret. The value of logRSS for a certain altitude means little by itself, it only becomes meaningful when compared to a second point along the curve. For instance, in the example above: if the Log-RSS value at 2000m is approximately 1.2 and the Log-RSS value at 2500m is approximately 1.5, the animal's preference for 2000m compared to 2500m is equal to -0.3 on the log-odds scale. When transforming back to the RSS scale [^6] we get that the probability of selecting a location at 2000m is $exp(-0.3) = `{r} round(exp(-0.3),2)`$ times the probability of selecting a location at 2500m (all else being equal).
+
+[^6]: RSS, logRSS and odds-ratios can be a bit confusing and overwhelming. Let's start with logRSS, this is probably the most intuitive of the three. When fitting an SSF, we get a series of
+
+#### Adding time to the movement kernel
+
+It's reasonable to expect the movement kernel (i.e. the step length and turning angle distributions) to change throughout the day. Our animals are probably going to be less active during the night and more active during the day. A typical way of simulating and modelling temporal effects is using sine-cosine curves. If we add a term to our model where the response depends on $sin(time) + cos(time)$[^7], the response will fluctuate throughout the day, with a maximum and a minimum.
+
+[^7]: Using both sin and cos together allows us to shift the position of the peak, which would be impossible if we only used one or the other. It comes at the cost of two extra parameters instead of just one, though.
+
+To do so we can simply modify the parameter values of the step length (the rate of the exponential distribution) and the turning angle distribution (the concentration of the Von Mises distribution). The easiest way is to multiply them by the sin & cos terms as follows.
+
+```{r}
+#| label: Allowing the movement kernel to vary over time
+#| echo: TRUE
+#| message: FALSE
+#| warning: FALSE
+#| fig.height: 12
+#| fig.width: 9
+#| code-fold: TRUE
+#| cache: TRUE
+
+## Creating vectors for calculating kappa and lambda over time ####
+time <- seq(0, 24, length.out = 200)
+
+## Deciding where the peak will be ####
+# The two beta values decide where the peak will be and the amplitude
+beta_lambda1 <- 0
+beta_lambda2 <- 0.020
+beta_kappa1 <- 0
+beta_kappa2 <- -1
+
+## Create the fluctuation in time for both parameters ####
+# The higher the lambda the lower the step length
+# We will expect a peak at night
+# We add the sin+cos term to the original lambda value
+lambda_time <- lambda + (beta_lambda1*sin(time*2*pi/24) + 
+                         beta_lambda2*cos(time*2*pi/24)) 
+# The higher the kappa the straighter the movement
+# We will expect a peak during daytime
+# We add the sin+cos term to the original kappa value
+kappa_time <- kappa + (beta_kappa1*sin(time*2*pi/24) + 
+                         beta_kappa2*cos(time*2*pi/24)) 
+
+## Plot the two parameters showing how the distribution will look ####
+# We choose 3 example values of lambda and kappa at t=2, t=12 & t=16
+lambda_example <- c(lambda + (beta_lambda1*sin(2*2*pi/24) + 
+                         beta_lambda2*cos(2*2*pi/24)),
+                    lambda + (beta_lambda1*sin(12*2*pi/24) + 
+                         beta_lambda2*cos(12*2*pi/24)),
+                    lambda + (beta_lambda1*sin(18*2*pi/24) + 
+                         beta_lambda2*cos(16*2*pi/24)))
+kappa_example <- c(kappa + (beta_kappa1*sin(2*2*pi/24) + 
+                         beta_kappa2*cos(2*2*pi/24)),
+                    kappa + (beta_kappa1*sin(12*2*pi/24) + 
+                         beta_kappa2*cos(12*2*pi/24)),
+                    kappa + (beta_kappa1*sin(18*2*pi/24) + 
+                         beta_kappa2*cos(16*2*pi/24)))
+# We create 3 inset plots for each parameter showing the distribution
+sl_insets <- map(lambda_example, \(x){
+  # x axis fixed to 0 to 300m (all plots equal)
+  xax <- seq(0, 100, length.out = 200)  
+  df <- data.frame(xax, y = dexp(xax, rate = x))
+  ggplot(df, aes(xax, y)) +
+    geom_line(size = 1, color = "#0072B2") +
+    theme_minimal(base_size = 10) +
+    labs(x = "Step-Length (m)", y = "Density") +
+    coord_cartesian(xlim = c(0, 100), 
+                    ylim = c(0, max(dexp(0, rate = min(lambda_example)))*1.1)) +
+    theme(panel.grid = element_blank(), 
+      axis.text.y = element_blank(), 
+      axis.ticks.y = element_blank(),
+      axis.line = element_line(color = "black", size = 0.5),
+      panel.border = element_rect(color = "black", fill = NA, size = 0.6))
+})
+ta_insets <- map(kappa_example, \(x){
+  xax <- seq(-pi, pi, length.out = 200)
+  df <- data.frame(xax, y = dvonmises(xax, mu = 0, kappa = x))
+  ggplot(df, aes(xax, y)) +
+    geom_line(size = 1, color = "red") +
+    theme_minimal(base_size = 10) +
+    labs(x = "Turn-angle (radians)", y = "Density") +
+    coord_cartesian(xlim = c(-pi, pi), 
+                    ylim = c(0, max(dvonmises(0, mu = 0, kappa = max(kappa_example)))*1.1)) +
+    theme(panel.grid = element_blank(), 
+      axis.text.y = element_blank(), 
+      axis.ticks.y = element_blank(),
+      axis.line = element_line(color = "black", size = 0.5),
+      panel.border = element_rect(color = "black", fill = NA, size = 0.6))
+})
+# We create the general lambda plot with insets
+df_lambda <- data.frame(time = time, lambda = lambda_time) # Dummy df
+df_insets <- tibble::tibble(
+  x = c(0.2, 12, 24),       
+  y = c(max(lambda_time)*0.05, max(lambda_time)*0.95, max(lambda_time)*0.05),
+  plot = sl_insets
+)
+df_arrows <- tibble::tibble(
+  xstart = c(4, 12, 21),
+  ystart = c(0.02, 0.12, 0.02),
+  xend = c(2, 12, 16),
+  yend = lambda_example
+)
+plot_lambda <- ggplot(data = df_lambda, aes(x = time, y = lambda)) +
+  geom_line(size = 1, color = "#D55E00") + 
+  geom_point(data = df_arrows,
+             aes(x = xend, y = yend),
+             size = 2,
+             color = "black",
+             fill = "blue") +
+  geom_segment(
+    data = df_arrows,
+    aes(x = xstart, y = ystart, xend = xend, yend = yend),
+    arrow = arrow(length = unit(0.15,"cm")),
+    color = "darkgrey",
+    size = 0.4
+  ) +
+  geom_plot(data = df_insets, aes(x = x, y = y, label = plot),
+            vp.width = 0.3,
+            vp.height = 0.35) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) + 
+  scale_x_continuous(limits = c(0, 24), 
+                     breaks = c(0, 6, 12, 18, 24), 
+                     expand = c(0,0)) +
+  theme_minimal(base_size = 14) +
+  labs(x = "Time (hours)", y = "Lambda (rate)") +
+  theme(
+    panel.grid = element_blank(),
+    panel.background = element_rect(fill = "white", color = NA),
+    axis.line = element_line(size = 0.4, color = "black"),
+    axis.ticks = element_line(size = 0.3, color = "black"), # small ticks
+    axis.ticks.length = unit(0.15, "cm"),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.8)
+  )
+# We create the general kappa plot with insets
+df_kappa <- data.frame(time = time, kappa = kappa_time) # Dummy df
+df_insets <- tibble::tibble(
+  x = c(0.2, 12, 24),       
+  y = c(max(kappa_time)*1.15, max(kappa_time)*0.05, max(kappa_time)*1.15),
+  plot = ta_insets
+)
+df_arrows <- tibble::tibble(
+  xstart = c(3, 12, 22),
+  ystart = c(1.8, 0.1, 2.5),
+  xend = c(2, 12, 16),
+  yend = kappa_example
+)
+plot_kappa <- ggplot(data = df_kappa, aes(x = time, y = kappa)) +
+  geom_line(size = 1, color = "#D55E00") + 
+  geom_point(data = df_arrows,
+             aes(x = xend, y = yend),
+             size = 2,
+             color = "black",
+             fill = "blue") +
+  geom_segment(
+    data = df_arrows,
+    aes(x = xstart, y = ystart, xend = xend, yend = yend),
+    arrow = arrow(length = unit(0.15,"cm")),
+    color = "darkgrey",
+    size = 0.4
+  ) +
+  geom_plot(data = df_insets, aes(x = x, y = y, label = plot),
+            vp.width = 0.3,
+            vp.height = 0.32) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 3)) + 
+  scale_x_continuous(limits = c(0, 24), 
+                     breaks = c(0, 6, 12, 18, 24), 
+                     expand = c(0,0)) +
+  theme_minimal(base_size = 14) +
+  labs(x = "Time (hours)", y = "Kappa (concentration)") +
+  theme(
+    panel.grid = element_blank(),
+    panel.background = element_rect(fill = "white", color = NA),
+    axis.line = element_line(size = 0.4, color = "black"),
+    axis.ticks = element_line(size = 0.3, color = "black"), # small ticks
+    axis.ticks.length = unit(0.15, "cm"),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.8)
+  )
+## Plotting the two plots together ####
+plot_lambda / plot_kappa
+```
+
+Here we can see that our rate and concentration parameters peak at opposite times [^8]. At night, the rate parameter is highest, giving a very narrow distribution of step lengths (the animal is less active at night). At midday, we have low rate values, which indicate the animal is taking longer steps on average. Similarly, the concentration of the turn angle distribution peaks around midday, meaning that turning angles are more concentrated around 0 at that time of day (a more concentrated distribution means straighter movement). The smaller plots inside the figures show the step length and turning angle distributions for each time (and parameter value).
+
+[^8]: Keep in mind that in this case the peak in average step length coincides with the peak in turn angle concentration, meaning that at night the chamois move less and less directionally, while during the day they move longer distances in straighter paths. This is a common pattern in animals, but it doesn't have to be that way, I have coded it like this to make the example more intuitive and realistic, but in your study system it might be different!
+
+## Simulating the tracks
+
+Now that we have defined how our animals will move it's time to run the actual simulations. To do so we will need the following:
+
+-   *A habitat map*: I have prepared it, and put it in the *Data/Cartography* folder
+
+-   *An elevation map*: same as the habitat map
+
+-   *Initial locations for our animals*: I have decided ten points at random close to the center of our habitat map which will serve as our starting points.
+
+-   *Some extra settings*: which I will determine a bit further down (e.g. how long the tracks will be, adding a bit of sampling noise, etc)
+
+-   *The parameters I set in the previous section*: the movement and selection kernels
+
+To simulate our trajectories I will do something similar to the process of fitting an SSF. I will take a location, generate several random steps from this location using the movement kernel, and choose one using the selection kernel. Usually the more likely step will be chosen, but every now and then an unlikely location (e.g. at a weird habitat and altitude) will be picked, like would happen in any process involving stochasticity. After this we take the end of the step we just simulated as our new starting point and start over. Overall the pattern that will emerge after simulating enough steps should follow the distributions that we specified and look somewhat like a track that an animal would actually produce.
+
+### Loading habitat and elevation data
+
+Both layers are in raster format, with the same projection and resolution. For an SSF this isn't necessary, but it can make interpretation easier if everything is at the same scale. The data look like this:
+
+-   *Habitat layer*: a 10x10m raster with three habitat values (*Open*, *Shrubland* and *Forest*)
+
+-   *Altitude layer*: a 10x10m DEM of the study area
+
+Here we can see both rasters plotted:
+
+```{r}
+#| label: Loading & plotting the covariate rasters
+#| echo: TRUE
+#| message: FALSE
+#| warning: FALSE
+#| cache: TRUE
+#| fig.width: 8
+#| fig.height: 6
+
+## Load rasters ####
+habitat <- rast(here("Data", "Cartography", "Habitats_Reclassified.tif"))
+# Add habitat category labels 
+levels(habitat)[[1]] <- data.frame(
+  ID = c(1, 2, 3),
+  category = c("Open", "Shrubland", "Forest"))
+altitude <- rast(here("Data/Cartography/DEM.gpkg"))
+
+## Plot the rasters together ####
+# par(mfrow = c(1, 2),
+#     mar = c(1,1,1,1))
+# plot(habitat, main = "Habitat")
+# plot(altitude, main = "Altitude")
+```
+
+The study area encompasses all three habitat types, although forest clearly dominates over open and shrubland. The altitude ranges from somewhat under 1000m to barely above 2500m. All ideal conditions for the chamois. In the center of the area we have the mountains of the Cadí-Moixeró, going East to West, with the axial Pyrenees in the north and some lesser massifs in the south.
+
+### Determining starting locations
+
+Since we are simulating data we have to set an arbitrary starting location for our imaginary chamois. When working with real data this is simply the first location in your dataset. Here I set 10 locations somewhat in the center of the study area, this will be the initial location from which to simulate steps in our track.
+
+```{r}
+#| label: Setting initial locations
+#| echo: TRUE
+#| message: FALSE
+#| warning: FALSE
+#| cache: TRUE
+
+## Setting some arbitrary initial locations ####
+set.seed(123)
+x <- runif(25, min = 385000, max = 395000)
+y <- runif(25, min = 4675000, max = 4685000)
+time <- as.POSIXct("2025-01-01 00:00:00", 
+                   tz = "Europe/Madrid")
+start_loc <- st_as_sf(
+  data.frame(x = x, y = y, time = time),
+  coords = c("x", "y"),
+  crs = 25831 
+)
+
+## Plot the initial locations on the altitude map ####
+altitude <- rast(here("Data/Cartography/DEM.gpkg"))
+agg_rast <- as.data.frame(aggregate(altitude, fact = 10), xy = TRUE)
+alt_df <- as.data.frame(agg_rast, 
+                        xy = TRUE)
+ggplot() +
+  geom_raster(data = alt_df, aes(x = x, y = y, fill = Height)) +
+  geom_sf(data = start_loc, color = "red", size = 2) +
+  scale_fill_viridis_c() +
+  coord_sf() +
+  theme_minimal()
+```
+
+Now that our chamois have a starting location we can start simulating steps!
+
+### Simulating steps and selection
+
+Simulating the track is now just a matter of applying the rules I set earlier to our step-generating and choosing process. We take our movement kernel, with the parameters specified earlier, generate random steps from it and choose one based on the probabilities defined by the selection kernel. I will do this by writing a function that does the entire process for a chosen number of steps.
+
+1.  Starting with the initial location, generate 10 random steps from the step length and turning angle distributions
+
+2.  Extract altitude and habitat for each location
+
+3.  Assign selection odds for each location and choose one step based on these
+
+4.  Repeat points 1 to 3 starting with the last selected step
+
+```{r}
+#| label: Simulating tracks function
+#| echo: TRUE
+#| message: FALSE
+#| warning: FALSE
+#| code-fold: TRUE
+
+## Writing a track simulation function ####
+tracksim <- function(initloc,
+                     inittime,
+                     n_steps,
+                     step_interval,
+                     n_candidates,
+                     sl_lambda,
+                     ta_kappa,
+                     alt_raster,
+                     hab_raster,
+                     alt_selection,
+                     hab_selection,
+                     beta_lambda1,
+                     beta_lambda2,
+                     beta_kappa1,
+                     beta_kappa2) {
+  
+  # Storage for simulated track
+  track <- matrix(NA_real_, nrow = n_steps + 1L, ncol = 2L)
+  track[1L, ] <- initloc[[1L]]
+  
+  # Pre-compute full time vector as numeric seconds (optimization)
+  step_secs     <- step_interval * 60L
+  init_secs     <- as.numeric(inittime[[1L]])
+  times_num     <- init_secs + (0L:n_steps) * step_secs
+  
+  midnight_secs <- as.numeric(
+    as.POSIXct(format(inittime[[1L]], "%Y-%m-%d 00:00:00"))
+  )
+  hours_vec     <- ((times_num - midnight_secs) %% 86400) / 3600
+  time_rad_vec  <- hours_vec * (2 * pi / 24)
+  
+  # Precompute per-step lambda & kappa (optimization)
+  lambda_vec <- sl_lambda +
+    beta_lambda1 * sin(time_rad_vec) +
+    beta_lambda2 * cos(time_rad_vec)
+  kappa_vec  <- ta_kappa +
+    beta_kappa1 * sin(time_rad_vec) +
+    beta_kappa2 * cos(time_rad_vec)
+  
+  # Initialize previous angle (random start)
+  prev_angle <- runif(1L, 0, 2 * pi)
+  
+  # Get study area bounds and raster coordinates
+  raster_ext <- as.vector(ext(alt_raster))   # [xmin, xmax, ymin, ymax]
+  xmin  <- raster_ext[1L]; xmax <- raster_ext[2L]
+  ymin  <- raster_ext[3L]; ymax <- raster_ext[4L]
+  res_x <- res(alt_raster)[1L]
+  res_y <- res(alt_raster)[2L]
+  nrow_r <- nrow(alt_raster)
+  ncol_r <- ncol(alt_raster)
+  
+  # Transform rasters to matrices for quicker lookup
+  alt_matrix <- as.matrix(alt_raster, wide = TRUE)
+  hab_matrix <- as.matrix(hab_raster, wide = TRUE)
+  
+  # Prepare altitude interpolation for faster running
+  alt_range  <- range(values(alt_raster), na.rm = TRUE)
+  alt_grid   <- seq(alt_range[1L], alt_range[2L], length.out = 1000L)
+  alt_lut_y  <- exp(predict(alt_selection, alt_grid)$y)
+  alt_span   <- alt_range[2L] - alt_range[1L]
+  lut_len    <- length(alt_lut_y)   # 1000
+  
+  # Interpolate altitude look-up table (optimization)
+  lut_interp <- function(vals) {
+    idx_f  <- (vals - alt_range[1L]) / alt_span * (lut_len - 1L) + 1L
+    idx_f  <- pmax(1, pmin(lut_len - 1L, idx_f))
+    idx_lo <- floor(idx_f)
+    frac   <- idx_f - idx_lo
+    alt_lut_y[idx_lo] * (1 - frac) + alt_lut_y[idx_lo + 1L] * frac
+  }
+  
+  # Habitat lookup table, precomputed once (Optimization)
+  hab_selection_ind <- hab_selection +
+    c(rnorm(1L, 0, abs(hab_selection[1L]) / 10),
+      rnorm(1L, 0, abs(hab_selection[2L]) / 10),
+      0)
+  
+  max_hab_code <- max(hab_matrix, na.rm = TRUE)
+  n_sel        <- length(hab_selection_ind)
+  hab_lut      <- exp(hab_selection_ind[pmin(seq_len(max_hab_code), n_sel)])
+  
+  # Fast von Mises sampler (optimization)
+  rvonmises_fast <- function(n, mu, kappa) {
+    if (kappa < 1e-6) return(runif(n, 0, 2 * pi))   # uniform when kappa ≈ 0
+    tau <- 1 + sqrt(1 + 4 * kappa^2)
+    rho <- (tau - sqrt(2 * tau)) / (2 * kappa)
+    r   <- (1 + rho^2) / (2 * rho)
+    
+    out <- numeric(n)
+    i   <- 1L
+    while (i <= n) {
+      u1 <- runif(1L); u2 <- runif(1L); u3 <- runif(1L)
+      z  <- cos(pi * u1)
+      f  <- (1 + r * z) / (r + z)
+      c_ <- kappa * (r - f)
+      if ((c_ * (2 - c_) - u2) > 0 || (log(c_ / u2) + 1 - c_) >= 0) {
+        out[i] <- (mu + sign(u3 - 0.5) * acos(f)) %% (2 * pi)
+        i <- i + 1L
+      }
+    }
+    out
+  }
+  
+
+  # Step simulation loop
+  for (i in seq_len(n_steps)) {
+    
+    lambda_time <- lambda_vec[i]
+    kappa_time  <- kappa_vec[i]
+    
+    # Step-length and turning-angle candidates
+    sl <- rexp(n_candidates, rate = lambda_time)
+    ta <- rvonmises_fast(n_candidates, mu = prev_angle, kappa = kappa_time)
+    
+    x_new <- track[i, 1L] + sl * cos(ta)
+    y_new <- track[i, 2L] + sl * sin(ta)
+    
+    # Check for out of bounds
+    inside <- x_new >= xmin & x_new <= xmax &
+      y_new >= ymin & y_new <= ymax
+    
+    # Handle edge case when all candidate locations are out of bounds
+    if (!any(inside)) {
+      track[i + 1L, ] <- track[i, ]
+      next
+    }
+    x_new[!inside] <- xmin
+    y_new[!inside] <- ymin
+    
+    # Coordinate to matrix index 
+    col_idx <- pmax(1L, pmin(ncol_r, floor((x_new - xmin) / res_x) + 1L))
+    row_idx <- pmax(1L, pmin(nrow_r, floor((ymax  - y_new) / res_y) + 1L))
+    midx    <- cbind(row_idx, col_idx)
+    
+    alt_vals <- alt_matrix[midx]
+    hab_vals <- hab_matrix[midx]
+    
+    # Selection weights
+    alt_odds   <- lut_interp(alt_vals)          
+    hab_odds   <- hab_lut[hab_vals]             
+    total_odds <- alt_odds * hab_odds
+    
+    # Handling NAs and out of bounds
+    total_odds[!inside | is.na(total_odds)] <- 0
+    if (sum(total_odds) == 0) {
+      total_odds          <- numeric(n_candidates)
+      total_odds[inside]  <- 1 / sum(inside)
+    }
+    chosen_idx      <- sample.int(n_candidates, size = 1L, prob = total_odds)
+    track[i + 1L, ] <- c(x_new[chosen_idx], y_new[chosen_idx])
+    prev_angle      <- atan2(y_new[chosen_idx] - track[i, 2L],
+                             x_new[chosen_idx] - track[i, 1L])
+  }
+  data.frame(
+    x    = track[, 1L],
+    y    = track[, 2L],
+    time = .POSIXct(times_num, tz = attr(inittime[[1L]], "tzone"))
+  )
+}
+```
+
+```{r}
+#| label: Simulating tracks implemented
+#| echo: TRUE
+#| message: FALSE
+#| warning: FALSE
+#| code-fold: TRUE
+#| cache: TRUE
+
+altitude <- rast(here("Data/Cartography/DEM.gpkg"))
+habitat  <- rast(here("Data/Cartography/Habitats_Reclassified.gpkg"))
+
+alt_ptr <- terra::wrap(altitude)
+hab_ptr <- terra::wrap(habitat)
+
+plan(multisession, workers = 3L)
+
+tic()
+all_tracks <- future_map(
+  seq_len(nrow(start_loc)),
+  function(i) {
+    
+    # Unwrap rasters once per worker session, not once per task (optimization)
+    if (!exists(".sim_rasters", envir = .GlobalEnv)) {
+      .sim_rasters <- list(
+        alt_r = terra::unwrap(alt_ptr),
+        hab_r = terra::unwrap(hab_ptr)
+      )
+      assign(".sim_rasters", .sim_rasters, envir = .GlobalEnv)
+    }
+    rasters <- get(".sim_rasters", envir = .GlobalEnv)
+    
+    tr <- tracksim(
+      initloc       = start_loc[i, ]$geometry,
+      inittime      = start_loc[i, ]$time,
+      n_steps       = 3000L,
+      step_interval = 20L,
+      n_candidates  = 10L,
+      sl_lambda     = lambda,
+      ta_kappa      = kappa,
+      alt_raster    = rasters$alt_r,
+      hab_raster    = rasters$hab_r,
+      alt_selection = spline_fit,
+      hab_selection = c(logrss_open, logrss_shrubland, 0),
+      beta_lambda1  = beta_lambda1,
+      beta_lambda2  = beta_lambda2,
+      beta_kappa1   = beta_kappa1,
+      beta_kappa2   = beta_kappa2
+    )
+    tr$ID <- i
+    tr
+  },
+  .options = furrr_options(
+    seed     = 123L,
+    # [OPT] {circular} removed – rvonmises_fast() uses base R only
+    packages = "terra",
+    globals  = c(
+      "alt_ptr", "hab_ptr", "start_loc",
+      "lambda", "kappa", "spline_fit",
+      "logrss_open", "logrss_shrubland",
+      "beta_lambda1", "beta_lambda2",
+      "beta_kappa1",  "beta_kappa2",
+      "tracksim"
+    )
+  )
+)
+toc()
+
+plan(sequential)
+
+tracks <- bind_rows(all_tracks)
+```
+
+After simulating the tracks let's check how they look on a map
+
+```{r}
+#| label: Plotting simulated tracks
+#| echo: TRUE
+#| message: FALSE
+#| warning: FALSE
+#| code-fold: TRUE
+
+## Plot the tracks for visual inspection ####
+agg_rast <- as.data.frame(aggregate(altitude, fact = 10), xy = TRUE)
+alt_df <- as.data.frame(agg_rast, xy = TRUE)
+ggplot() +
+  geom_raster(data = alt_df, aes(x = x, y = y, fill = Height)) +
+  scale_fill_viridis_c() +
+  geom_path(data = tracks,
+            aes(x = x, y = y, group = ID, color = as.factor(ID)),
+            size = 0.7) +
+  theme_minimal() +
+  labs(fill = "Altitude")
+```
+
+## Adding some "noise" to the data to make it look more realistic
+
+Now we just add some jitter to our positions and timestamps to make the track look a bit more realistic. We also can delete a few locations so that during the practice session we will see how to deal with missing data. I am writing a function to handle the resampling that takes the tracks generated before and adds:
+
+-   Some variation in fix intervals, since GPS don't always capture locations in perfect intervals.
+
+-   Small location error, reflecting current GPS standards
+
+-   Some gaps in the data, for moments where satellite coverage was insufficient or some other technical malfunctions, so we can see how to handle gaps in the data
+
+```{r}
+#| label: Adding noise
+#| echo: TRUE
+#| message: FALSE
+#| warning: FALSE
+#| code-fold: TRUE
+#| cache: TRUE
+
+set.seed(123)
+
+## Writing a function to create some noise ####
+noise_track <- function(track,
+                        sd_time,
+                        sd_space,
+                        p_drop) {     
+  
+  n <- nrow(track)
+  
+  ## a) Jitter time 
+  time_jitter <- rnorm(n, mean = 0, sd = sd_time)
+  track$time <- track$time + time_jitter
+  
+  ## b) Jitter space (bivariate normal, independent x/y)
+  track$x <- track$x + rnorm(n, mean = 0, sd = sd_space)
+  track$y <- track$y + rnorm(n, mean = 0, sd = sd_space)
+  
+  ## c) Randomly delete locations
+  keep <- runif(n) > p_drop
+  track <- track[keep, ]
+  
+  rownames(track) <- NULL
+  track
+}
+
+## Running the function to obtain the final track ####
+final_tracks <- noise_track(tracks,
+                            sd_time = 45, 
+                            sd_space = 1,
+                            p_drop = 0.025)
+
+## Store the simulated data ####
+saveRDS(final_tracks, file = here("Data", "Movement_Data", "Chamois_Tracks.rds"))
+```
+
+This is it! We have successfully simulated our study data!!! Now let's analyse it!

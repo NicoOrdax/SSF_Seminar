@@ -1,0 +1,565 @@
+---
+title: "SSF Practical - Day 2: Fitting simple SSFs"
+author: "Nico Ordax"
+format:
+  html:
+    code-fold: true
+knitr:
+  opts_chunk:
+    echo: true
+    warning: false
+    message: false
+editor: visual
+---
+
+During this session we'll learn how to fit simple SSFs to a dataset of simulated animal tracks. We'll start by reading and inspecting our data to see the dataset that we are working with. We'll then clean and prepare our data, before we fit the model and explore and interpret the results.
+
+## Using Quarto for this workshop
+
+Quarto documents are a very powerful way to incorporate R analyses to documents. They allow us to combine regular text with snippets (chunks) or R code like the following:
+
+```{r}
+
+# Example R chunk
+print("hello world")
+```
+
+Everything that is inside the chunk will be run in the console if you press the little green triangle on the top right corner of the chunk. You can also run the lines one by one with `ctrl + enter` like a regular R script.
+
+For instance, try running this chunk that contains the packages we'll use in this session:
+
+```{r}
+
+# Packages
+pacman::p_load("here", # Filepath management
+               "tidyverse", # Data carpentry
+               "purrr", # Applying functions to several elements in a list
+               "lubridate", # Handling time data
+               "ggplot2", # Plotting
+               "sf", # Analysing spatial data (vectorial)
+               "terra", # Analysing spatial data (raster)
+               "amt", # Movement data analysis and handling
+               "circular", # Stats in circular space
+               "mgcv", # Fitting non-linear models such as GAMs
+               "glmmTMB" # Fitting GLMMs and extensions
+               )
+```
+
+We can create reports, documents, presentations with nice markdown formatting, while also adding figures, tables and images generated with our code. It even allows inserting references and bibliographies. Quarto files (`.qmd`) in their raw format - like this one - look a bit dull. For our purpose in this course this is enough, but if you want to combine everything and render it nicely you have to click the `render` button at the top of the document. This will run all of the code chunks, showing their output, and combine them with the text as specified into an html/PDF/word document.
+
+This course is not intended as an introduction to Quarto. In these documents you will find an explanation of the different tasks that we will complete during our workshop's coding practicals, followed by R chunks where you will have to complete the code to carry out said tasks. To facilitate the work, as well as helping those less proficient in R and stats, the idea is to pair up and complete the tasks in pairs. You also have a sample of the completed script in the same folder `Coding_Day2_Answers.qmd` in case you get stuck or want to check your answers (I recommend you give it a try first, though).
+
+## Our mock dataset
+
+We are working with a simulated dataset that tries to mimick the movements of several Pyrenean chamois *(Rupicapra pyrenaica)* in the mountains of the Serra del Cadí, in the north of Catalonia. This dataset was created specifically for this workshop, with the specific modeling aspects that we will study in mind. We will use this dataset throughout the workshop when trying to understand different parts of the SSF fitting process, from cleaning the data to plotting the outputs of our models. In the `Documentation` folder of the course repository you will also find a quarto/html document detailing the data simulation process. I strongly encourage you to check it out at some point. It will help you understand how the data was created as well as how and why we are fitting our models the way we are fitting them.
+
+## Reading the movement data
+
+The data is stored in an `.rds` file under the following address `SSF_Workshop/Data/Movement_Data/Chamois_Tracks.rds`. You can easily load it using the `readRDS()` function. I strongly suggest managing filepaths using the `here()` function of the package with the same name. Try to answer the following questions:
+
+*a) What do the data look like? What kind of object did you just load?*
+
+*b) How many rows of data do we have? What does each row represent?*
+
+*c) What columns do our data contain? What does each column represent?*
+
+*d) How many individual tracks does our dataset contain? (this information is stored in the ID column)*
+
+*e) How long is each track? Both in number of locations as well as the time between the first and last location (in days).*
+
+You can use the following chunk to write your code. You already have the code to load the dataset. There are many ways to answer the previous questions, feel free to work however you prefer, this is just a warm up exercise.
+
+```{r}
+#| label: Data loading
+
+# 1. Load the chamois tracks
+#### your code here
+
+# 2. Have a look at how the data are structured (questions a-d)
+#### your code here
+  
+# 3. Explore the individual tracks (question e)
+#### your code here
+
+```
+
+## Selecting one individual and plotting its track
+
+We will only use one individual's track to learn how to fit the first basic SSFs. Later on we will explain what happens when we start adding inter-individual variability and how our models can handle that. For now, you can select one individual that you want from those in the dataset and discard the remaining data. Then you can make a simple plot of the track to see how it looks like.
+
+*a) Choose one individual to keep its location data and discard the rest. Keep track of the object you store the data in, we'll need it later.*
+
+*b) Create a simple plot that visualizes the track. You don't need to get fancy with background maps, for now we just want to see if there are any weird things or outliers.*
+
+Use the following chunk to write your code. Remember that if you're stuck you can check the sample code. The goal of this isn't to learn how to plot tracks but rather how to fit SSFs.
+
+```{r}
+#| label: Choosing and plotting an example individual
+
+# Choose one individual 
+#### your code here
+
+# Plot the track
+#### your code here
+
+```
+
+Have a quick look at the track. Do you see any patterns? If there is anything that catches your attention try to think why it might be that way.
+
+## Reading the environmental data
+
+Since we are trying to determine what is driving our animals to move the way they're moving we will have to look at some environmental covariates as well. For our workshop I have already downloaded and prepared a couple of layers containing habitat and altitude information on our study area, you can find them in the `Data/Cartography/` folder. Read both the habitat and altitude (DEM) rasters in the folder and then plot them quickly to see what they look like
+
+*a) Read the habitat (`Habitats_Reclassified.gpkg`) and the altitude (`DEM.gpkg`) layers. Both are rasters, which you can open using the `rast()` function of the `terra` package.*
+
+*b) What is the rough altitudinal range in our study area?*
+
+*c) Which habitat classes do we have in our study area? Do you think they might condition how animals move? Do you think the chamois will have a prefered habitat?*
+
+```{r}
+#| label: Reading Env Data
+
+# Reading the altitude data
+#### your code here
+
+# Reading the habitat data
+#### your code here
+
+# Plot the elevation and habitat
+#### your code here
+
+# Check the altitudinal range
+#### your code here
+
+```
+
+Now that we have all the data let's think about what we are trying to accomplish here.
+
+## Defining our goals
+
+As we have now seen we have data on 10 individual chamois, tracked for an entire week in a study area for which we have cartography on the altitude and habitats. As with any ecological study the most important part is defining our objectives and study questions properly. In an SSF framework there is usually the double goal of modeling movement and habitat selection jointly, although we might give more prominence to one aspect or the other depending on our research goals. In this case we will try to answer several different questions which will serve as case studies for different aspects of SSFs and their implementation over this and the next day. We will start with simple models and then add layers of complexity to model our chamois' movement in a more realistic way.
+
+Here are the main questions we will try to answer and what the main goal of each analysis will be:
+
+1.  Do chamois show preference for a certain habitat over the others? We will start with one of the simplest cases in SSF analysis to get a feel on how to fit these models, focusing on how to prepare the data, fitting and interpreting a simple model.
+
+2.  Do chamois move differently at different times of day? Now we allow SSF parameters to change according to certain variables (time of day in this case)
+
+3.  Do chamois show preference for a certain altitudinal range? Here we will introduce how to allow for non-linear relationships between explanatory variables and selection odds.
+
+4.  Do different individuals show different movement and selection behaviour? Finally, we will discuss how to incorporate multiple individuals to our analyses, and how to account for individual variability.
+
+Once we have some clear questions let's move on to answer them!
+
+## Do chamois show preference for a certain habitat over the others?
+
+This first example will be useful to study the entire data handling process to fit an SSF. The workflow for the following questions will be essentially the same, but introducing some more complexity in the model formulas. We will start first by ensuring that our dataset is in the right format for SSF analysis and then we will convert our locations into steps to feed the model. Then we will run the model and explore some outputs.
+
+### Preparing the dataset for analysis
+
+We are using the dataset from the individual we chose previously. First of all, since SSFs assume equal time intervals for all steps, we need to **make sure that the data are sampled in regular time intervals**. This means that locations should ideally be separated by equal or very similar time intervals. If there are any gaps or weird intervals we will need to flag them so that they are not used in the model fitting. We will be doing this using the functions in the `amt` package, but you can do it manually or use other packages.
+
+Remember that the help pages in RStudio are usually decent, and you can access them by writing `?function_name` in the console. This will only work if the package that the function belongs to is loaded.
+
+*a) Convert your track to a `trk` class object of the `amt` package. You will have to use the `make_track()` function. You should specify `crs = 25831` as this is the projection the data are in. Name your new object `ind_trk`*.
+
+*b) Now that you have a `trk` object, use the `summarize_sampling_rate()` function to check the sampling intervals in your data. You can also view the dataset and check some values manually. Are they all exactly the same?*
+
+```{r}
+#| label: Check Sampling Rates
+
+# Convert the track to amt-trk
+#### your code here
+
+# Check the sampling rates
+#### your code here
+
+```
+
+Since it seems that most locations are taken every 20min we will use this as our sampling interval. We will now start constructing our steps. This means taking two successive points, calculate the distance between them and the turning angle (respective to the direction of the previous step). If the time interval between our two points is around 10min (we may leave 1-2min as a tolerance margin) we can proceed to define the step. If the time interval is much different (e.g. due to a GPS malfunction) we will not use these two points to define a step and move on to the next points. For this process you will need to do the following:
+
+*a) Resample the track so that your steps' time intervals are 20minutes . You can do this by using the `track_resample()` function and set the sampling rate to 20min and the tolerance to 2min (you will have to specify `minutes(20)` and `minutes(2)` in the argument).*
+
+*b) When resampling, you will notice that there is a new column in your dataset called `burst_`. A sequence of locations that are each separated by 10min from the previous one form a burst. When we hit a location that is more than 10min from the previous our burst is interrupted and we start a new burst. We will have to get rid of all bursts with less than 3 locations. After resampling, run `filter_min_n_burst(n = 3)` on the resampled dataset. Why do you think we need to do this?*
+
+*c) Inspect the track object before and after using `track_resample()`, what has changed? How many bursts are there?*
+
+*d)* *Now define the steps (e.g. calculate step lengths and turning angles for each pair of locations) using the `steps_by_burst()` function, you will have to. Check out how the dataset looks now. What does each row represent now? Store your output in an object called `steps`*.
+
+*e) The two most important columns in our steps dataframe are `sl_` and `ta_`. What do you think they represent?* *What is the difference between `x1_`, `x2_`, `y1_` and `y2_`? The first row is missing the turning angle, why is that?*
+
+```{r}
+#| label: Resample Tracks and Define Steps
+
+# Inspect the track before resampling
+#### your code here
+
+# Resample to 20min intervals with a 2min tolerance
+#### your code here
+
+# Inspect the resampled track
+#### your code here
+
+# Now create the dataset of steps
+#### your code here
+
+# Check the resulting dataset
+#### your code here
+
+```
+
+Now we have a dataset of real steps, that the animal took while moving. We want to understand why the animal took these exact steps and not any of the millions of alternatives. Now we need to generate a dataset of other possible steps that our animal could've taken, so we can compare real to simulated steps. Since a step is defined by a step-length and turning angle combination, if we have an initial location we only need to simulate those two to get a new landing spot. For each step, starting at a location `x1_`, `y_1` we will simulate $N$ new steps with `x2_`, `y2_` depending on the simulated `sl_` and `ta_`.
+
+We now have to choose how to simulate those new steps. This means that we'll be deciding how we want to model the movement kernel, by choosing a step length distribution (such as exponential, Gamma, etc.) and a turning angle distribution (typically Von Mises). We'll use the step lengths and turning angles from our animal's track and fit a distribution to each of them. From this distribution we will simulate new values of turning angles and step lengths to produce steps that are similar to those our animal took in real life. Luckily, the `amt` package has the `random_steps()` function which generates the new steps for us. We only need to specify the fitted step length and turning angle distributions as well as the number of new steps we want to generate.
+
+*a) Visualize the distribution of step lengths and turning angles of our real steps dataset. You can simply plot a histogram of `sl_` and `ta_`. What distribution do you think might be a good fit for them?*
+
+*b) We will choose an exponential distribution to model step lengths and a Von Mises distribution to model turning angles. To fit these the `amt` package has the `fit_distr()` function that does it directly when you give it a vector of step lengths or turning angles and the name of the distribution you want to fit (in this case `"exp"` and `"vonmises"`). You can store the fitted distributions in an object (call them `sl_dist` and `ta_dist`, we will need them later on.*
+
+*c) Now that we have the two distributions and the original dataset of steps let's generate new random steps for each real one. We do this by using the `random_steps()` function, passing the original steps, the step length and turning angle distributions and the number of steps we want to simulate (in this case we'll choose 20). Store it in an object named `random_steps`.*
+
+*d) Inspect the resulting dataset. Before checking how many rows there are think how many you would expect, does it match your expectation? Check out the new column called `case_`. What information does it contain?*
+
+```{r}
+#| label: Fitting sl and ta distributions and simulate steps
+
+# Inspect sl_ and ta_ in our real steps
+#### your code here
+
+# Fit the step length and turning angle distributions
+#### your code here
+
+# Visualize the fit of the sl and ta distributions
+#### your code here
+
+# Generate random steps 
+#### your code here
+
+# Explore the random steps object
+#### your code here
+
+```
+
+Now that we have a dataset of real and simulated steps, we want to see if chamois choose their steps based on the habitat of the place they will end up at. We want to know if how much more likely they are to choose one habitat above the other **all else being equal**. To do so we need to know what habitat category we have at the end of our steps (real and simulated), this is the last thing we have to do to prepare the data for fitting the SSF. There are many ways to do so, here again `amt` is coming to our help with the `extract_covariates()` function.
+
+*a) Extract the habitat value at the end of each step. Pass the `random_steps` object as the data, the `habitat` raster to the `covariates` argument, and use the `where = "end"` argument. Why do you think it's important to extract the habitat at the end location instead of the starting location? Could you imagine a case in which we would want to extract covariate values for the starting location of a step? Name the resulting object `ssf_data`.*
+
+*b) Inspect the resulting object to make sure everything went well. What do you think will end up being our response variable in the SSF? What variables will be the explanatory variables?*
+
+```{r}
+#| label: Habitat covariate extraction
+
+# Extract habitat covariates at the end of steps
+#### your code here
+
+# Inspect the resulting object
+#### your code here
+
+```
+
+Now that we have everything let's move on to the easy part: fitting the model!
+
+Are steps from the same burst independent from one another? Are they correlated?
+
+### Fitting the SSF
+
+As you will see, once you have your data in the right format, fitting is quite simple, and often very quick. There are many ways to fit SSFs: most model fitting softwares allow to fit these kind of models. For simple SSFs the easiest way is to use the `amt` package, which once again has the right function for us. We can use the `fit_ssf()` or `fit_clogit()` functions, pass the data and model formula and run it.
+
+*a) Let's determine the model formula together, then try and run the model with one of the two functions (doesn't matter which, the output should be the same). Store the model in an object named `fitted_ssf`.*
+
+*b) Inspect the model object. What are the four main slots within it (you can either use `str(fitted_ssf)` or in RStudio write `fitted_ssf$` and wait for the autocomplete to show you. What does each one contain?*
+
+*c) Compare the `fitted_ssf$sl_` slot with the `sl_dist` object we fitted earlier. What do you see?*
+
+```{r}
+#| label: Fitting the habitat SSF model
+
+# Fit the ssf model
+#### your code here 
+
+
+# Inspect the model object
+#### your code here
+
+
+# Compare the sl_ slot with the sl_dist object
+#### your code here
+
+```
+
+Before we can proceed there is something important that we can't forget. We have to update the parameters of our step length and turning angle distributions! The reason for this will be explained tomorrow, but you need to know that this is very important if you plan on analysing any results concerning the movement kernel. If you're just interested in the selection kernel you can skip this, but I think it's good practice to do it in case we ever want to go back to the movement kernel.
+
+First we'll do it by using the `update_sl_distr()` and `update_ta_distr()` functions from (you guessed it) `amt`. However, if at some point you're fitting SSFs outside of `amt` it will be useful to know how to update the parameters manually.
+
+*a) Update the step length and movement angle distributions using `amt` and store it in two objects named `sl_update` and `ta_update`.*
+
+*b) Update the movement kernel again, but this time manually. Store the output in two objects named `sl_update_manual` and `ta_update_manual`. You can simply assign a new parameter value within the distribution object (e.g. `sl_dist$params$rate <- ...`).*
+
+*c) Check if the manually and automatically updated distributions are identical.*
+
+```{r}
+#| label: Update movement kernel distributions
+
+# Update the step length distribution
+#### your code here
+
+# Update the turn angle distribution
+#### your code here
+
+# Update the movement kernel manually
+#### your code here
+
+# Check if the updated distributions are identical
+#### your code here
+
+```
+
+Now that we have the selection-free movement kernel we can explore the results.
+
+### Exploring SSF outputs
+
+As usual, the first thing we'll do is check out the model summary. When we run `summary()` on our SSF model object we will be shown the coefficients of all the parameters in the model formula, as well as a few extra things.
+
+*a) Check out the model summary and focus first on the habitat parameters. Why are there two values for the coefficients `coef` and `exp(coef)`? Do you think the chamois prefers open habitat, shrubland or forest? Which habitat will it spend the most time in?*
+
+*b) What do the coefficients for step length and turning angle tell us? What does it mean if they are significant?*
+
+```{r}
+#| label: SSF summary
+
+# Checking model summary
+#### your code here
+
+```
+
+Now we can do a quick plot of the movement and selection kernels. For the movement kernel we usually show the selection-free (updated) movement kernel, although we may also compare it to the original to see how much selection affects movement. For the selection kernel we have the choice to represent the coefficients on the log-odds or the odds scale. They both represent the same exact process so both are fine, just make sure you keep in mind which scale you're using when interpreting the coefficient values!
+
+*a) Create a simple plot of the step length distribution (probability density vs step length). You already have the rate parameter of the updated exponential distribution from before. You can add the selection-biased step length distribution as well to compare them.*
+
+*b) Do the same for the turning angle distribution. Does any of the distributions shift? If yes, how do you interpret this?*
+
+*c) Plot the selection kernel. What kind of plot would you use? Choose whether to plot the odds or the log-odds, you have both coefficients in the model object you created earlier. Where is the coefficient for open habitat? Can you incorporate it into the graph?*
+
+```{r}
+#| label: Plotting
+
+# Plot the step-length distribution
+#### your code here
+
+# Plot the turning-angle distribution
+#### your code here
+
+# Plot the selection kernel
+#### your code here
+
+```
+
+Congratulations!!! You have done your first SSF analysis!
+
+## Do chamois move differently at different times of day?
+
+We will now start complicating our models slightly, by allowing the parameters of our movement kernel to vary according to a new variable (in this case, time of day). In this case, you will see that the main complication is how to incorporate the new variable into the model: we will barely need to do any further manipulation to our dataset.
+
+*a) Start by adding a variable that measures time of day to our dataset, so that the day starts at 0 (00:00:00) and ends at 1 (23:59:59). Name it "tod". You can extract this information from the `t1_` variable in our dataset, by using the `hour()`, `minute()` and `second()` functions from the `lubridate` package.*
+
+*b) Why did we choose `t1_` and not `t2_`?*
+
+```{r}
+#| label: Extract time of day variable
+
+# Get tod
+#### your code here
+
+```
+
+In this case, our "time of day" variable presents a slight complication: it's constant within a step (i.e. both the real and simulated steps show the same value for time of day). As we explained earlier, the set of one real and its associated simulated steps are called a stratum. Since we are only comparing steps within a stratum (we cannot compare a real step with a simulated step corresponding to a different real step), this means we cannot include "time of day" directly in our model as a main effect.
+
+Before fitting a model we need to have an idea on how we want our movement data to vary throughout the day:
+
+*a) Make a simple plot where you show step lengths depending on time of day. Do you see any circadian pattern in the data? You can add a smooth term if that helps.*
+
+*b) If you see a pattern, can you think of a way to fit a model to account for this pattern? Are there any other ways to do so?*
+
+```{r}
+#| label: Checking the movement by time of day
+
+# Plot the step lengths by time of day
+#### your code here
+
+```
+
+What we can do is adding time of day as an interaction term that modulates one of our movement or selection variables. In this example, since we're interested in the way that movement changes during the day, we will allow the parameters of the step length and turning angle distributions to interact with the time of day. This way animals may move straighter and/or further at certain times of day. We will still have a selection kernel in our model which we'll keep from the previous example.
+
+*a) Together, let's think of a model structure that accounts for the time-varying movement kernel and keeps the selection kernel as before.*
+
+*b) Now try and fit this model and store it in an object called `tod_mod`.*
+
+*c) Explore the summary of the model. What are the coefficients telling us? Did the coefficients for the selection kernel change much relative to the previous model?*
+
+```{r}
+#| label: Fitting the time of day model
+
+# Fitting the model with the formula we've decided
+#### your code here
+
+
+# Explore the model summary
+#### your code here
+
+```
+
+Now we'll try to plot the movement kernel of the model, and how it varies throughout the day. There are many options to represent this, we'll do it by plotting the mean of the step length distribution and the concentration parameter of the turning angle distribution throughout the day. How will we know what the mean and the concentration are at each time of day?
+
+-   As we've seen before, the mean of the step length distribution is inversely proportional to $\lambda$, so that $mean(sl) = 1/\lambda$. If we know how $\lambda$ varies with time we automatically know the mean step length. To get the real value of $\lambda$ we have to apply the parameter correction we saw earlier, where we adjust the movement kernel parameters for selection. When working with an exponential step length distribution this means subtracting the coefficients for step length from the $\lambda$ of the original step length distribution (from our raw data). In this case:
+
+    $\lambda_{(t)} = \lambda_0 - (\beta_{sl} + \beta_{cos(t)}cos(2 \pi t )+ \beta_{sin(t)}sin(2 \pi t))$
+
+-   For the step length distribution things are much easier since we're not transforming the parameters, but rather using the concentration ($\kappa$) directly. Thus, we only have to figure out how the concentration changes with time. In this case:
+
+    $\kappa_{(t)} = \kappa_0 + (\beta_{ta} + \beta_{cos(t)}cos(2 \pi t) + beta_{sin(t)}sin(2 \pi t))$
+
+To plot these two parameters easily we can create a dummy dataframe with several values for time of day and the corresponding values for mean step length and concentration (after correction). Then we plot the dataset. Remember you have the parameters of the biased step length and turning angle distributions stored in your model object under `tod_mod$sl_$params$rate` and `tod_mod$ta_$params$kappa` respectively.
+
+*a) Recover the parameters of the biased step length and turning angle distributions. Extract the coefficients for all model terms related to step length and turning angle.* *The model coefficients are stored in `tod_mod$model$coefficients`.*
+
+*b) Create a dataframe with 100 values of time of day between 0 and 1. Create a column that is* $\lambda_{(t)}$ *and another one that is* $\kappa_{(t)}$*. Using the former you can create another column that contains mean step length (by simply calculating* $1/\lambda_{(t)}$)*.*
+
+*c) Create two plots showing* $\lambda_{(t)}$ *over time of day and* $\kappa_{(t)}$ *over time of day. Is the* $\kappa_{(t)}$ *plot a turning angle distribution?* *How do you interpret this output? Why are we plotting mean step length and not* $\lambda(t)$*?*
+
+```{r}
+#| label: Plotting the time-varying movement kernel
+
+# Extract coefficients
+#### your code here
+
+# Create a dummy dataframe
+#### your code here
+
+# Plot the mean step length throughout the day
+#### your code here
+
+# Plot the concentration of the turning angle distribution through the day
+#### your code here
+
+```
+
+We have seen an example on how to fit an SSF where one or more of its components vary over time. The $sin(2 \pi t) + cos(2 \pi t)$ method is just one of many way to fit cyclical time-varying responses. It won't always be the most suitable method, but it works well when we have time-dependent variables or parameters that are cyclical and unimodal. If the response seems non-linear or has multiple peaks, other frameworks such as Generalized Additive Models (GAMs) might be more adequate. It's also important to remember that although we've shown an example where the movement kernel varied over time, the same can happen with the selection kernel (an animal might select for certain habitats or resources at certain hours more than others). It's important that you think very well about your study system when modeling and choose the right model for your study questions.
+
+## Do chamois show preference for a certain altitudinal range?
+
+In some situations we might expect some of the relationships in our data to be non-linear. For instance, while it made sense to model time of day using a cyclical term, other covariates might not behave so smoothly. For instance, when modeling preference for continuous variables, we often find responses that are non-linear. For example, response curves for ecological niches (e.g. how well an organism fares at a range of temperatures or altitudes) are usually non-linear, with one or more optima, which are hard to model using classical frameworks such as GLMM. In such cases non-linear models such as GAMs offer a good alternative that provide a much closer fit at the cost of losing some explanatory power (as you don't have coefficients that you can easily interpret).
+
+Now we'll learn how to fit a model where part of the selection kernel is expected to behave non-linearly. Chamois are not typically found at the bottom of valleys, or at the very top of the highest mountains, where conditions are very harsh. They usually occupy an intermediate altitude zone while avoiding extremely low and extremely high areas. We will add a new layer to our SSF by adding altitude as a covariate in our model, and allowing it to behave non-linearly. Our new SSF will be fit using the GAM framework, with the structure of the model being the same as before but adding a non-linear smooth for altitude.
+
+The data preparation is essentially the same as for the previous SSFs, we just have to extract the altitude values for our real and simulated steps like we extracted the habitat data.
+
+*a) Add a new column to `ssf_data` where you extract the altitude information from the `altitude` raster. If you don't remember check out the "Preparing the dataset for analysis" section in the previous sections. Save it to an object called `ssf_alt_data`* *and inspect the resulting object to make sure everything works.*
+
+```{r}
+#| label: Altitude covariate extraction
+
+# Extract altitude covariates at the end of steps
+#### your code here
+
+# Inspect the resulting object
+#### your code here
+
+```
+
+Now that we have our dataset including altitude, let's move on to fit the model. This is the moment where we leave behind our beloved `amt` package, which unfortunately doesn't allow to fit non-linear responses in SSFs (at least not yet). We will now use the `gam()` function of the `mgcv` package. Since GAMs allow both linear and non-linear terms within the same model, we can keep the previous model structure intact and just add a non-linear smooth for altitude.
+
+*a) Let's decide on the model formula together and then fit the model. The model call in `gam()` is slightly more complicated, as it requires adding a dummy variable and a couple of extra arguments which we will see here. Store the model in an object named `nl_ssf`.*
+
+*b) Inspect the model summary. What has changed? What does the `s(Height)` part of the summary tell us?*
+
+```{r}
+#| label: Fitting a GAM-SSF
+
+# Adding a dummy time to allow fitting a Cox-PH model & scaling sl
+#### your code here
+
+# Fitting the SSF (takes ca. 30s on my PC)
+#### your code here
+
+# Inspect the model output
+#### your code here
+
+```
+
+One of the main problem with GAMs is that there are no coefficients (at least not easily accessible ones) to interpret. To evaluate the output the easiest way is to graph it and then make your interpretations on the resulting graph. Let's try and plot the Relative Selection Strength (RSS) for our range of altitudes.
+
+*a) Plot the altitude selection smooth for the GAM we just fitted. If there is only one non-linear term you can simply use the `plot()` function of base R with the model object for a quick and easy visualization of the smooth.*
+
+```{r}
+#| label: Plotting the GAM-SSF for altitude
+
+# Plot the selection smooth for altitude
+#### your code here
+
+```
+
+Unlike `fit_ssf()` or similar functions from the `amt` package, `gam()` doesn't store the original movement kernel values, so if we want to inspect the updated step length and turning angle distributions we'd have to store the original parameters for the biased distributions and later update them manually.
+
+## Do different individuals show different movement and selection behaviour?
+
+So far we've been looking at SSFs fitted to a single individual. Traditionally SSFs have mostly ignored inter-individual variation in movement, and focused either on tracks of a single individual or, when data on multiple individuals was available, treated all of them as if they behaved the same way. This means that all the data are pooled and treated as if they were independent steps, leaving out the individual. It is possible, however, to fit SSFs with individual-level random effects. Now we'll use the data on the remaining individuals to fit such a model. We'll allow selection for habitat to change between individuals.
+
+First we'll have to prepare the data for the entire dataset (cleaning, resampling, bursting, generating steps and extracting covariates). To make things easier this part is already done (as you've already learned how to do it before). Just run the following chunk of code:
+
+```{r}
+#| label: Data prep
+
+# Pipeline for creating the steps dataframe for all individuals
+trks <- make_track(tracks, x, y, time, id = ID, crs = 25831) |> 
+  arrange(id, t_) |> 
+  nest(data = - id) |> 
+  mutate(steps = map(data, \(x){
+    track_resample(x, 
+                   rate = minutes(40),
+                   tolerance = minutes(5)) |> 
+      filter_min_n_burst(n = 10) |> 
+      steps_by_burst()
+  })) |> 
+  select(id, steps) |> 
+  unnest(steps)
+
+# Fitting an initial sl and ta distribution
+sl_all <- fit_distr(trks$sl_, "exp")
+ta_all <- fit_distr(trks$ta_, "vonmises")
+
+# Generating random steps
+random_all <- random_steps(trks,
+                             sl_distr = sl_all,
+                             ta_distr = ta_all, 
+                             n_control = 10)
+
+# Extracting covariates
+ssf_data_all <- random_all |> 
+  extract_covariates(covariates = habitat, 
+                     where = "end")
+```
+
+The fitting of an SSF with a random effect requires some creativity. Here we are following Chatterjee et al. (2023) and using the `fitTMB()` function in the `glmmTMB` package. We will fit a conditional logistic regression model, and add a random intercept for individual and habitat. It doesn't make sense to add random slopes in such a model, as the stratum/step structure would already capture it.
+
+*a) Now we'll see the formula for fitting a simple Mixed Effects SSF. We won't run it in class, as it takes very long. I've run it on my computer before and stored it in the `Data/Outputs/` folder. You can load the model object with `readRDS()` and inspect the summary.*
+
+```{r}
+#| label: Running Random Effects Model
+
+# # Not running this as it'll take ~15min
+# mod_RE <- glmmTMB(case_ ~
+#                      sl_ + 
+#                      cos(ta_) +
+#                      habitat +
+#                      (0 + habitat | id) +
+#                      (1 | step_id_),
+#                    REML = FALSE,
+#                    family = poisson(),
+#                    data = ssf_data_all)
+
+# Load the model object and inspect
+#### your code here
+
+```
+
+That's all we're able to cover in this short workshop! This only covers some very basics of SSFs, they have much more to offer. I think the beauty in SSFs is that they are incredibly flexible and allow you to answer an enormous range of possible questions using movement data. The idea behind this workshop was to give you an introduction so that you know what they are, see some examples of questions that can be addressed with them and learn how to implement some of the basic models. I also wanted to show you some ways in which SSFs can be expanded to add more complexity and realism. If you found any of the applications interesting you can continue digging, there is an increasingly large body of literature available. I hope you enjoyed the course as much as I enjoyed preparing it!

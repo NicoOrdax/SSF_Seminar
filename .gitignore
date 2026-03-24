@@ -1,0 +1,17 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.RDataTmp
+
+Documentation/Extra_Data_Simulation_cache/
+
+Documentation/Extra_Data_Simulation_files/
+
+Images/
+
+Participants/
+
+Slides/Day_2_Fitting_SSFs.pptx
+Slides/Day_3_SSF_Extensions.pptx
+

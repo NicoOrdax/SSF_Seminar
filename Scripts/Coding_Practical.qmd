@@ -216,21 +216,26 @@ We now have to choose how to simulate those new steps. This means that we'll be 
 
 *b) We will choose an exponential distribution to model step lengths and a Von Mises distribution to model turning angles. To fit these the `amt` package has the `fit_distr()` function that does it directly when you give it a vector of step lengths or turning angles and the name of the distribution you want to fit (in this case `"exp"` and `"vonmises"`). You can store the fitted distributions in an object (call them `sl_dist` and `ta_dist`, we will need them later on.*
 
-*c) Now that we have the two distributions and the original dataset of steps let's generate new random steps for each real one. We do this by using the `random_steps()` function, passing the original steps, the step length and turning angle distributions and the number of steps we want to simulate (in this case we'll choose 20). Store it in an object named `random_steps`.*
-
-*d) Inspect the resulting dataset. Before checking how many rows there are think how many you would expect, does it match your expectation? Check out the new column called `case_`. What information does it contain?*
-
 ```{r}
-#| label: Fitting sl and ta distributions and simulate steps
+#| label: Fitting sl and ta distributions
 
 # Inspect sl_ and ta_ in our real steps
 #### your code here
 
 # Fit the step length and turning angle distributions
 #### your code here
+```
 
-# Visualize the fit of the sl and ta distributions
-#### your code here
+Now we know what the biased movement kernel looks like for our study individual. We have fitted a step length and turning angle distribution that match our data and have gotten their respective paramters. Now that we have the two distributions and the original dataset of steps let's generate new random steps for each real one.
+
+*a) Generate random steps for our observed ones. We do this by using the `random_steps()` function, passing the original steps, the step length and turning angle distributions and the number of steps we want to simulate (in this case we'll choose 20). Store it in an object named `random_steps`.*
+
+*b) Inspect the resulting dataset. Before checking how many rows there are think how many you would expect, does it match your expectation? Check out the new column called `case_`. What information does it contain?*
+
+*c) Check out the step length and turning angle distributions of the simulated steps. Compare them to the original data.*
+
+```{r}
+#| label: Fitting sl and ta distributions and simulate steps
 
 # Generate random steps 
 #### your code here
@@ -238,6 +243,8 @@ We now have to choose how to simulate those new steps. This means that we'll be 
 # Explore the random steps object
 #### your code here
 
+# View the step lengths and turning angles from the simulated steps
+#### your code here
 ```
 
 Now that we have a dataset of real and simulated steps, we want to see if chamois choose their steps based on the habitat of the place they will end up at. We want to know if how much more likely they are to choose one habitat above the other **all else being equal**. To do so we need to know what habitat category we have at the end of our steps (real and simulated), this is the last thing we have to do to prepare the data for fitting the SSF. There are many ways to do so, here again `amt` is coming to our help with the `extract_covariates()` function.
@@ -311,7 +318,6 @@ First we'll do it by using the `update_sl_distr()` and `update_ta_distr()` funct
 
 # Check if the updated distributions are identical
 #### your code here
-
 ```
 
 Now that we have the selection-free movement kernel we can explore the results.

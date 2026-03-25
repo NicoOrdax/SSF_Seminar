@@ -185,8 +185,8 @@ Now I'm going to set values for the RSS of our habitats that reflect the chamois
 #| warning: FALSE
 
 # Setting log-RSS
-logrss_shrubland <- 1.4 # Moderate selection for shrubland
-logrss_open <- 1.8 # Stronger selection for open habitats
+logrss_shrubland <- 0.3 # Moderate selection for shrubland
+logrss_open <- 0.8 # Stronger selection for open habitats
 ```
 
 #### Selection for altitude
@@ -247,7 +247,7 @@ plot(alt_df$alt, pref_smooth, type = "l", lwd = 2, col = "blue",
      xlab = "Altitude (m)", ylab = "Log-RSS")
 ```
 
-With continuous variables Relative Selection Strength becomes a bit harder to interpret. The value of logRSS for a certain altitude means little by itself, it only becomes meaningful when compared to a second point along the curve. For instance, in the example above: if the Log-RSS value at 2000m is approximately 1.2 and the Log-RSS value at 2500m is approximately 1.5, the animal's preference for 2000m compared to 2500m is equal to -0.3 on the log-odds scale. When transforming back to the RSS scale [^6] we get that the probability of selecting a location at 2000m is $exp(-0.3) = `{r} round(exp(-0.3),2)`$ times the probability of selecting a location at 2500m (all else being equal).
+With continuous variables Relative Selection Strength becomes a bit harder to interpret. The value of logRSS for a certain altitude means little by itself, it only becomes meaningful when compared to a second point along the curve. For instance, in the example above: if the Log-RSS value at 2000m is approximately 1.2 and the Log-RSS value at 2500m is approximately 1.5, the animal's preference for 2000m compared to 2500m is equal to -0.3 on the log-odds scale. When transforming back to the RSS scale [^6] we get that the probability of selecting a location at 2000m is $\exp(-0.3) =$ `{r} round(exp(-0.3), 2)` undefined times the probability of selecting a location at 2500m (all else being
 
 [^6]: RSS, logRSS and odds-ratios can be a bit confusing and overwhelming. Let's start with logRSS, this is probably the most intuitive of the three. When fitting an SSF, we get a series of
 
@@ -308,13 +308,13 @@ kappa_example <- c(kappa + (beta_kappa1*sin(2*2*pi/24) +
 # We create 3 inset plots for each parameter showing the distribution
 sl_insets <- map(lambda_example, \(x){
   # x axis fixed to 0 to 300m (all plots equal)
-  xax <- seq(0, 100, length.out = 200)  
+  xax <- seq(0, 300, length.out = 300)  
   df <- data.frame(xax, y = dexp(xax, rate = x))
   ggplot(df, aes(xax, y)) +
     geom_line(size = 1, color = "#0072B2") +
     theme_minimal(base_size = 10) +
     labs(x = "Step-Length (m)", y = "Density") +
-    coord_cartesian(xlim = c(0, 100), 
+    coord_cartesian(xlim = c(0, 300), 
                     ylim = c(0, max(dexp(0, rate = min(lambda_example)))*1.1)) +
     theme(panel.grid = element_blank(), 
       axis.text.y = element_blank(), 
@@ -346,7 +346,7 @@ df_insets <- tibble::tibble(
 )
 df_arrows <- tibble::tibble(
   xstart = c(4, 12, 21),
-  ystart = c(0.02, 0.12, 0.02),
+  ystart = c(0.02, 0.03, 0.01),
   xend = c(2, 12, 16),
   yend = lambda_example
 )
@@ -527,7 +527,7 @@ Now that our chamois have a starting location we can start simulating steps!
 
 Simulating the track is now just a matter of applying the rules I set earlier to our step-generating and choosing process. We take our movement kernel, with the parameters specified earlier, generate random steps from it and choose one based on the probabilities defined by the selection kernel. I will do this by writing a function that does the entire process for a chosen number of steps.
 
-1.  Starting with the initial location, generate 10 random steps from the step length and turning angle distributions
+1.  Starting with the initial location, generate $N$ random steps from the step length and turning angle distributions
 
 2.  Extract altitude and habitat for each location
 
@@ -711,6 +711,7 @@ tracksim <- function(initloc,
 #| warning: FALSE
 #| code-fold: TRUE
 #| cache: TRUE
+#| eval: FALSE
 
 altitude <- rast(here("Data/Cartography/DEM.gpkg"))
 habitat  <- rast(here("Data/Cartography/Habitats_Reclassified.gpkg"))
@@ -785,13 +786,18 @@ After simulating the tracks let's check how they look on a map
 #| warning: FALSE
 #| code-fold: TRUE
 
+
+## Load the tracks (if not already loaded)
+tracks_plot <- readRDS(here("Data", "Movement_Data", "Chamois_Tracks.rds"))
+altitude <- rast(here("Data/Cartography/DEM.gpkg"))
+
 ## Plot the tracks for visual inspection ####
 agg_rast <- as.data.frame(aggregate(altitude, fact = 10), xy = TRUE)
 alt_df <- as.data.frame(agg_rast, xy = TRUE)
 ggplot() +
   geom_raster(data = alt_df, aes(x = x, y = y, fill = Height)) +
   scale_fill_viridis_c() +
-  geom_path(data = tracks,
+  geom_path(data = tracks_plot,
             aes(x = x, y = y, group = ID, color = as.factor(ID)),
             size = 0.7) +
   theme_minimal() +
@@ -815,6 +821,7 @@ Now we just add some jitter to our positions and timestamps to make the track lo
 #| warning: FALSE
 #| code-fold: TRUE
 #| cache: TRUE
+#| eval: FALSE
 
 set.seed(123)
 

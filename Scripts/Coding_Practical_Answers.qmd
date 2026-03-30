@@ -471,7 +471,6 @@ Before fitting a model we need to have an idea on how we want our movement data 
 
 # Plot the step lengths by time of day
 ggplot(data = ssf_data, aes(x = tod, y = sl_)) +
-  geom_point() +
   geom_smooth()
 ```
 
